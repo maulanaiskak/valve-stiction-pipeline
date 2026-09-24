@@ -35,7 +35,7 @@ docker compose -f docker-compose.v2.yml up --build --scale detection-worker=3
 docker compose -f docker-compose.v2.yml logs -f detection-worker
 ```
 
-Same ingestion/detection code as V1 — `PUBLISH_MODE=kafka` switches ingestion to publish windows to Redpanda instead of calling detection directly, and `kafka_worker.py` is a second, thin transport over the same `detector.py` core `main.py`'s gRPC server uses. Verified: 3 `detection-worker` replicas in one consumer group each get assigned one of `valve-windows`' 3 partitions, and since `sensor_id` is the partition key, each replica ends up consistently handling one sensor — real horizontal scaling, not just multiple processes running the same thing. See `docs/V2_PLAN.md` for the full verification and the bugs found getting there (Redpanda topic auto-creation race, Python stdout buffering hiding all worker logs).
+Same ingestion/detection code as V1 — `PUBLISH_MODE=kafka` switches ingestion to publish windows to Redpanda instead of calling detection directly, and `kafka_worker.py` is a second, thin transport over the same `detector.py` core `main.py`'s gRPC server uses. Verified: 3 `detection-worker` replicas in one consumer group each get assigned one of `valve-windows`' 3 partitions, and since `sensor_id` is the partition key, each replica ends up consistently handling one sensor — real horizontal scaling, not just multiple processes running the same thing. Grafana's dashboard adds an "all sensors" latest-status table and stiction-rate bar chart (FR-10) ahead of the existing per-sensor detail view. See `docs/V2_PLAN.md` for the full verification and the bugs found getting there (Redpanda topic auto-creation race, Python stdout buffering hiding all worker logs).
 
 ## Why Go, not Rust
 

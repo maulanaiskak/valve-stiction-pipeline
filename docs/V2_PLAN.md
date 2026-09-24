@@ -1,6 +1,6 @@
 # V2 — Multi-sensor, distributed: build plan
 
-Status: v0.2 (FR-7/FR-8/FR-9 built and verified end-to-end; FR-10 dashboard aggregation still open, see below) · Scope: PRD §4 V2 (FR-7 through FR-10).
+Status: v1.0 (FR-7 through FR-10 all built and verified end-to-end, see below) · Scope: PRD §4 V2 (FR-7 through FR-10).
 
 ## Architecture (from PRD §6)
 
@@ -39,6 +39,6 @@ Verified with `docker compose -f docker-compose.v2.yml up --build --scale detect
 - ✅ Ingestion (`PUBLISH_MODE=kafka`) subscribing to per-sensor MQTT topics (`valve/data/+`, FR-7) and publishing windows to Redpanda keyed by `sensor_id` (FR-8)
 - ✅ 3 `detection-worker` replicas as one Kafka consumer group (`detection-group`) — **exactly the horizontal-scaling result FR-9 asks for**: each replica was assigned exactly one of the 3 partitions, and because `sensor_id` is the partition key, each partition consistently carried one sensor's windows the whole time (worker-1↔partition2↔valve-3, worker-2↔partition1↔valve-1, worker-3↔partition0↔valve-2). Correct labels per sensor (valve-1/valve-3 "yes", valve-2 "no", matching their configured stiction settings), confirmed both in worker logs and in `window_results` (14/14/14 rows, correct label per sensor).
 - ✅ V1 stays independently demoable: `docker-compose.yml` untouched, re-verified working after every V2-driven refactor to shared code (`detector.py` extraction, ingestion's `windowPublisher` abstraction)
-- ⏳ Dashboard aggregation (FR-10, "all sensors" overview panel) — not yet added, V1's per-sensor dashboard still works unchanged against either V1 or V2's `window_results` table (same schema)
+- ✅ Dashboard aggregation (FR-10): two new panels ahead of the existing per-sensor detail view (which stays filterable via `$sensor_id`, unchanged) -- "latest status" table (one row per sensor: label, last-seen timestamp, ellipse index) and a "stiction rate" bar chart (yes/no/uncertain window counts per sensor over the selected time range). Both verified directly against `/api/ds/query`: correct per-sensor attribution (valve-1/valve-3 mostly "yes", valve-2 mostly "no", matching their configured stiction settings), not just "the panel loaded."
 - ⏳ Partition rebalancing under replica failure/scale-change not explicitly tested (e.g. killing one worker mid-stream and confirming its partition gets picked up by a survivor) — Kafka consumer groups handle this natively, but "the library does it" isn't the same as having watched it happen here
 - **Deliberate, documented limitation**: V1 and V2 share host ports (1883 MQTT, 5432 Postgres, 3000 Grafana) since both compose files are meant to demo one phase at a time (`docker compose down` before switching), not run simultaneously. Giving V2 distinct ports was considered and skipped as unnecessary complexity for a portfolio scaffold.

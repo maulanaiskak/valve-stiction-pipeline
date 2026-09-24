@@ -19,10 +19,40 @@
   },
   "panels": [
     {
+      "id": 4,
+      "title": "All sensors -- latest status (FR-10)",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "TimescaleDB" },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT DISTINCT ON (sensor_id) sensor_id AS \"Sensor\", label AS \"Latest label\", window_start AS \"Last seen\", round(ellipse_index::numeric, 3) AS \"Ellipse index\" FROM window_results ORDER BY sensor_id, window_start DESC",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "All sensors -- stiction rate, selected time range (FR-10)",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "TimescaleDB" },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT sensor_id AS \"Sensor\", count(*) FILTER (WHERE label = 'yes') AS \"Stiction windows\", count(*) FILTER (WHERE label = 'no') AS \"Healthy windows\", count(*) FILTER (WHERE label = 'uncertain') AS \"Uncertain windows\" FROM window_results WHERE $__timeFilter(window_start) GROUP BY sensor_id ORDER BY sensor_id",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "id": 1,
-      "title": "PV / OP signal",
+      "title": "PV / OP signal ($sensor_id)",
       "type": "timeseries",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
       "datasource": { "type": "postgres", "uid": "TimescaleDB" },
       "targets": [
         {
@@ -35,9 +65,9 @@
     },
     {
       "id": 2,
-      "title": "Stiction label per window",
+      "title": "Stiction label per window ($sensor_id)",
       "type": "state-timeline",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
       "datasource": { "type": "postgres", "uid": "TimescaleDB" },
       "fieldConfig": {
         "defaults": {
@@ -59,9 +89,9 @@
     },
     {
       "id": 3,
-      "title": "Ellipse index per window",
+      "title": "Ellipse index per window ($sensor_id)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
       "datasource": { "type": "postgres", "uid": "TimescaleDB" },
       "targets": [
         {

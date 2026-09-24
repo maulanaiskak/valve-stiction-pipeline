@@ -56,6 +56,7 @@ services:
       MQTT_BROKER_URL: tcp://mosquitto:1883
       MQTT_TOPIC: valve/data
       DETECTION_SERVICE_ADDR: detection:50051
+      WINDOW_STRIDE: "25"
     depends_on:
       - mosquitto
       - detection

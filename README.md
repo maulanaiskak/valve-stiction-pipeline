@@ -24,7 +24,7 @@ Then watch the ingestion service's detection output:
 docker compose logs -f ingestion
 ```
 
-Grafana: http://localhost:3000 (anonymous access enabled for local dev).
+Grafana: http://localhost:3000 (anonymous access enabled for local dev) — datasource and dashboard ("Valve Stiction Detection": PV/OP signal, stiction label timeline, ellipse-index/kano-verdict trend) are auto-provisioned on startup, no manual setup needed.
 
 Toggle stiction injection via the simulator's `STICTION_ENABLED` env var in `docker-compose.yml` (default: `true`).
 

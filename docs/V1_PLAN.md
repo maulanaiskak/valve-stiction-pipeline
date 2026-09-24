@@ -1,6 +1,6 @@
 # V1 — Single-sensor pipeline: build plan
 
-Status: v0.2 (scaffolded and verified end-to-end, see §"What's scaffolded now vs. deferred") · Scope: PRD §4 V1 (FR-1 through FR-6). See the PRD (Notion) for full context — this doc only covers implementation decisions specific to building V1.
+Status: v0.3 (Grafana dashboard provisioned and verified, see §"What's scaffolded now vs. deferred") · Scope: PRD §4 V1 (FR-1 through FR-6). See the PRD (Notion) for full context — this doc only covers implementation decisions specific to building V1.
 
 ## Architecture (from PRD §6)
 
@@ -16,7 +16,7 @@ Status: v0.2 (scaffolded and verified end-to-end, see §"What's scaffolded now v
 - **Ingestion service (Go)**: MQTT subscribe (`eclipse/paho.mqtt.golang`), buffers each sensor's PV/OP into fixed-size windows (100 samples, matching what `valve-stiction-ml` validated the classic detector against — see its ML_PLAN.md §13 on why window size isn't an arbitrary choice), sends each full window to the detection service over gRPC.
 - **Detection service (Python, gRPC)**: reuses `valve-stiction-ml`'s `classic.py` directly — installed from its public GitHub repo (`requirements.txt`), not vendored/copied and not a local path dependency (which wouldn't survive a Docker build context). One implementation, reusable by both the training pipeline and this real-time service, exactly as `valve-stiction-ml`'s ML_PLAN.md §7 intended. Persists raw signal + detection result to TimescaleDB.
 - **Storage**: TimescaleDB (Postgres + time-series extension), one hypertable (`window_results`) holding both the raw per-window PV/OP arrays and the detection result — `db/init.sql`.
-- **Dashboard**: Grafana service is up and reachable (`docker compose up`, anonymous access enabled for local dev), but the TimescaleDB datasource and panels are not provisioned yet — that's next, not done.
+- **Dashboard**: Grafana, TimescaleDB datasource and 3 panels (PV/OP signal, stiction label state-timeline, ellipse-index/kano-verdict trend) provisioned automatically on startup via `grafana/provisioning/` — no manual clicking required, satisfying FR-5 and the "one command" spirit of FR-6. The datasource needs a pinned `uid: TimescaleDB` in its provisioning YAML, not just a `name` — Grafana auto-generates a random UID otherwise, which silently breaks any dashboard panel that references the datasource by a fixed UID (found this by testing the panels via `/api/ds/query` after provisioning, not by assuming the JSON was correct once it loaded without error).
 - **gRPC contract** (`proto/detection.proto`): `WindowRequest{sensor_id, pv[], op[], window_start_unix_ms}` → `WindowResponse{label, ellipse_index, kano_verdict, has_activity}` — mirrors the classic detector's output directly, no translation layer to keep in sync.
 - **Generated gRPC stubs are committed** (`ingestion/detectionpb/`, `detection/detectionpb/`), not regenerated at Docker build time. FR-6 wants `docker compose up` to just work for a reviewer who hasn't installed `protoc` + plugins locally — regenerate manually (see below) only when `proto/detection.proto` changes.
 
@@ -49,7 +49,7 @@ Verified with `docker compose up` — all 6 services (mosquitto, timescaledb, gr
 - ✅ Python detection service: gRPC server wrapping `valve_stiction_ml.classic`, TimescaleDB writes
 - ✅ Docker Compose wiring Mosquitto + TimescaleDB + Grafana + all three services — `docker compose up` brings up the whole stack, satisfying FR-6
 - ✅ End-to-end verified: simulator → MQTT → ingestion → gRPC → detection → TimescaleDB, with correct stiction labels
-- ⏳ Grafana dashboard panels + datasource provisioning (service is up, nothing configured yet)
+- ✅ Grafana dashboard: datasource + 3 panels auto-provisioned, each panel's SQL verified directly against `/api/ds/query` (status 200, real rows) — not just "the JSON loaded without error"
 - ⏳ `has_sufficient_activity`'s file-level reference std isn't available for a single real-time window (see `detection/main.py`) — currently always treated as active; a rolling per-sensor estimate is the real fix, not yet built
 - ⏳ Window stride (currently non-overlapping, matching training exactly; sliding-window real-time responsiveness not yet explored)
 - ⏳ Multiple concurrent sensors (FR-7, V2 scope) — ingestion's per-sensor buffering already supports this, not load-tested

@@ -1,0 +1,76 @@
+{
+  "title": "Valve Stiction Detection",
+  "uid": "valve-stiction-v1",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "5s",
+  "templating": {
+    "list": [
+      {
+        "name": "sensor_id",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "TimescaleDB" },
+        "query": "SELECT DISTINCT sensor_id FROM window_results ORDER BY sensor_id",
+        "refresh": 2,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "PV / OP signal",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "TimescaleDB" },
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT window_start + (idx - 1) * interval '100 milliseconds' AS time, pv_val AS \"PV\", op_val AS \"OP\" FROM window_results, unnest(pv, op) WITH ORDINALITY AS t(pv_val, op_val, idx) WHERE sensor_id = '$sensor_id' ORDER BY time",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Stiction label per window",
+      "type": "state-timeline",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
+      "datasource": { "type": "postgres", "uid": "TimescaleDB" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT window_start AS time, label AS \"Stiction\" FROM window_results WHERE sensor_id = '$sensor_id' ORDER BY time",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Ellipse index per window",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "datasource": { "type": "postgres", "uid": "TimescaleDB" },
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT window_start AS time, ellipse_index AS \"ellipse_index\", CASE WHEN kano_verdict THEN 1.0 ELSE 0.0 END AS \"kano_verdict\" FROM window_results WHERE sensor_id = '$sensor_id' ORDER BY time",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

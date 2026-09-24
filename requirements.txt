@@ -3,6 +3,7 @@ grpcio
 grpcio-tools
 protobuf
 psycopg2-binary
+confluent-kafka
 # classic.py is reused directly from valve-stiction-ml, not vendored/copied
 # (see docs/V1_PLAN.md) -- installed from its public repo so this works the
 # same in Docker builds as it does locally, no local file:// path dependency

@@ -1,0 +1,158 @@
+# V2 (PRD FR-7 through FR-10): multi-sensor, distributed via Redpanda.
+# Standalone, not merged with docker-compose.yml -- see docs/V2_PLAN.md
+# for why (Compose profiles can't cleanly swap a service's config without
+# both versions running and double-processing every sample).
+#
+# Run: docker compose -f docker-compose.v2.yml up --build --scale detection-worker=3
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: valve_stiction
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - timescaledb-data-v2:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - timescaledb
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+
+  # Redpanda's auto_create_topics_enabled=true wasn't reliable in practice:
+  # ingestion's first several publishes failed with "Unknown Topic Or
+  # Partition" before the topic existed with propagated metadata. Explicit
+  # creation with a fixed partition count (matching detection-worker's
+  # expected replica count, so each replica can own roughly one partition)
+  # is deterministic instead of racing a lazy auto-create.
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      # `rpk cluster health` needs the admin API (a different port/setup
+      # than the Kafka API this whole thing cares about) -- simpler to just
+      # retry topic creation directly until the Kafka API is actually
+      # ready, which is the thing that matters here anyway.
+      - |
+        until rpk topic create valve-windows --partitions 3 --brokers redpanda:9092; do
+          echo "redpanda not ready yet, retrying..."
+          sleep 2
+        done
+    depends_on:
+      - redpanda
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    environment:
+      MQTT_BROKER_URL: tcp://mosquitto:1883
+      MQTT_TOPIC: valve/data/+ # wildcard: per-sensor topics, FR-7
+      WINDOW_STRIDE: "25"
+      PUBLISH_MODE: kafka
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPIC: valve-windows
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+      mosquitto:
+        condition: service_started
+
+  # FR-9: horizontal scaling is Kafka/Redpanda's own partition assignment,
+  # not anything this service does -- N replicas with the same
+  # KAFKA_GROUP_ID is the whole mechanism. Scale with --scale detection-worker=N
+  # (3 matches valve-windows' partition count above; more replicas than
+  # partitions would leave some idle, which is fine, just not useful).
+  detection-worker:
+    build:
+      context: .
+      dockerfile: detection/Dockerfile
+    command: ["python", "kafka_worker.py"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@timescaledb:5432/valve_stiction
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPIC: valve-windows
+      KAFKA_GROUP_ID: detection-group
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+
+  simulator-1:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      MQTT_TOPIC: valve/data/valve-1 # FR-7: own topic per valve
+      SENSOR_ID: valve-1
+      STICTION_ENABLED: "true"
+    depends_on:
+      - mosquitto
+
+  simulator-2:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      MQTT_TOPIC: valve/data/valve-2
+      SENSOR_ID: valve-2
+      STICTION_ENABLED: "false"
+    depends_on:
+      - mosquitto
+
+  simulator-3:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      MQTT_TOPIC: valve/data/valve-3
+      SENSOR_ID: valve-3
+      STICTION_ENABLED: "true"
+    depends_on:
+      - mosquitto
+
+volumes:
+  timescaledb-data-v2:

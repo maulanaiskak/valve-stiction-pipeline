@@ -1,6 +1,10 @@
-// Ingestion service (PRD FR-2): subscribes to MQTT, buffers each sensor's
-// PV/OP into fixed-size windows, forwards full windows to the detection
-// service over gRPC.
+// Ingestion service (PRD FR-2, and FR-8's bridge in V2): subscribes to
+// MQTT, buffers each sensor's PV/OP into fixed-size windows, forwards full
+// windows onward -- either directly to the detection service over gRPC
+// (V1) or as a message on a Redpanda/Kafka topic keyed by sensor_id (V2).
+// See docs/V1_PLAN.md, docs/V2_PLAN.md for why the same binary does both
+// rather than forking: the windowing logic (buffering, stride, per-sensor
+// isolation) is identical either way.
 package main
 
 import (
@@ -13,6 +17,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	kafka "github.com/segmentio/kafka-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -41,6 +46,76 @@ type Sample struct {
 	TSUnixMs int64   `json:"ts"`
 }
 
+// WindowMessage is the Kafka/Redpanda wire format (V2) -- deliberately the
+// same fields as the gRPC WindowRequest (V1), just JSON instead of
+// protobuf. A second serialization path for the identical data isn't worth
+// a shared schema registry at this scope; revisit if that changes.
+type WindowMessage struct {
+	SensorID          string    `json:"sensor_id"`
+	PV                []float64 `json:"pv"`
+	OP                []float64 `json:"op"`
+	WindowStartUnixMs int64     `json:"window_start_unix_ms"`
+}
+
+// windowPublisher is how a completed window reaches the detection side --
+// direct gRPC call (V1) or a Kafka/Redpanda message (V2, FR-8). Swapping
+// this is the only thing that changes between the two modes; windowing
+// itself (sensorBuffer, handleSample below) doesn't know or care which one
+// is in use.
+type windowPublisher interface {
+	Publish(sensorID string, pv, op []float64, windowStart int64)
+}
+
+type grpcPublisher struct {
+	client pb.DetectionClient
+}
+
+func (p *grpcPublisher) Publish(sensorID string, pv, op []float64, windowStart int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := p.client.DetectWindow(ctx, &pb.WindowRequest{
+		SensorId:          sensorID,
+		Pv:                pv,
+		Op:                op,
+		WindowStartUnixMs: windowStart,
+	})
+	if err != nil {
+		log.Printf("[%s] detection request failed: %v", sensorID, err)
+		return
+	}
+	log.Printf(
+		"[%s] label=%s ellipse_index=%.3f kano=%v has_activity=%v",
+		sensorID, resp.Label, resp.EllipseIndex, resp.KanoVerdict, resp.HasActivity,
+	)
+}
+
+type kafkaPublisher struct {
+	writer *kafka.Writer
+}
+
+func (p *kafkaPublisher) Publish(sensorID string, pv, op []float64, windowStart int64) {
+	msg := WindowMessage{SensorID: sensorID, PV: pv, OP: op, WindowStartUnixMs: windowStart}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[%s] failed to marshal window message: %v", sensorID, err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Key = sensorID: Kafka/Redpanda guarantees same-key messages land on
+	// the same partition, keeping each sensor's windows in order for
+	// whichever consumer-group member ends up handling that partition --
+	// this is exactly FR-8's "partitioned by sensor_id" requirement.
+	err = p.writer.WriteMessages(ctx, kafka.Message{Key: []byte(sensorID), Value: payload})
+	if err != nil {
+		log.Printf("[%s] failed to publish window to kafka: %v", sensorID, err)
+		return
+	}
+	log.Printf("[%s] published window to kafka (window_start=%d)", sensorID, windowStart)
+}
+
 // sensorBuffer accumulates samples for one sensor until a full window is
 // ready. ts is tracked per-sample (not just a single start field) because
 // with sliding windows the buffer never fully empties between emissions --
@@ -53,13 +128,13 @@ type sensorBuffer struct {
 }
 
 type ingestor struct {
-	mu       sync.Mutex
-	buffers  map[string]*sensorBuffer
-	detector pb.DetectionClient
+	mu        sync.Mutex
+	buffers   map[string]*sensorBuffer
+	publisher windowPublisher
 }
 
-func newIngestor(client pb.DetectionClient) *ingestor {
-	return &ingestor{buffers: make(map[string]*sensorBuffer), detector: client}
+func newIngestor(publisher windowPublisher) *ingestor {
+	return &ingestor{buffers: make(map[string]*sensorBuffer), publisher: publisher}
 }
 
 func (in *ingestor) handleSample(s Sample) {
@@ -92,28 +167,8 @@ func (in *ingestor) handleSample(s Sample) {
 	buf.mu.Unlock()
 
 	if full {
-		in.sendWindow(s.SensorID, pvWindow, opWindow, windowStart)
+		in.publisher.Publish(s.SensorID, pvWindow, opWindow, windowStart)
 	}
-}
-
-func (in *ingestor) sendWindow(sensorID string, pv, op []float64, windowStart int64) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := in.detector.DetectWindow(ctx, &pb.WindowRequest{
-		SensorId:          sensorID,
-		Pv:                pv,
-		Op:                op,
-		WindowStartUnixMs: windowStart,
-	})
-	if err != nil {
-		log.Printf("[%s] detection request failed: %v", sensorID, err)
-		return
-	}
-	log.Printf(
-		"[%s] label=%s ellipse_index=%.3f kano=%v has_activity=%v",
-		sensorID, resp.Label, resp.EllipseIndex, resp.KanoVerdict, resp.HasActivity,
-	)
 }
 
 func getenv(key, fallback string) string {
@@ -123,10 +178,35 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
+func buildPublisher() windowPublisher {
+	mode := getenv("PUBLISH_MODE", "grpc")
+	switch mode {
+	case "grpc":
+		detectionAddr := getenv("DETECTION_SERVICE_ADDR", "localhost:50051")
+		conn, err := grpc.NewClient(detectionAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			log.Fatalf("failed to connect to detection service at %s: %v", detectionAddr, err)
+		}
+		return &grpcPublisher{client: pb.NewDetectionClient(conn)}
+	case "kafka":
+		brokers := getenv("KAFKA_BROKERS", "localhost:9092")
+		topic := getenv("KAFKA_TOPIC", "valve-windows")
+		writer := &kafka.Writer{
+			Addr:     kafka.TCP(brokers),
+			Topic:    topic,
+			Balancer: &kafka.Hash{}, // key-based partitioning, see kafkaPublisher.Publish
+		}
+		log.Printf("publishing windows to kafka topic %q on %s", topic, brokers)
+		return &kafkaPublisher{writer: writer}
+	default:
+		log.Fatalf("PUBLISH_MODE must be \"grpc\" or \"kafka\", got %q", mode)
+		return nil
+	}
+}
+
 func main() {
 	brokerURL := getenv("MQTT_BROKER_URL", "tcp://localhost:1883")
 	topic := getenv("MQTT_TOPIC", "valve/data")
-	detectionAddr := getenv("DETECTION_SERVICE_ADDR", "localhost:50051")
 
 	if strideStr := os.Getenv("WINDOW_STRIDE"); strideStr != "" {
 		stride, err := strconv.Atoi(strideStr)
@@ -137,13 +217,7 @@ func main() {
 	}
 	log.Printf("window_size=%d window_stride=%d", WindowSize, WindowStride)
 
-	conn, err := grpc.NewClient(detectionAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Fatalf("failed to connect to detection service at %s: %v", detectionAddr, err)
-	}
-	defer conn.Close()
-	client := pb.NewDetectionClient(conn)
-	in := newIngestor(client)
+	in := newIngestor(buildPublisher())
 
 	opts := mqtt.NewClientOptions().AddBroker(brokerURL).SetClientID("ingestion-service")
 	opts.SetOnConnectHandler(func(c mqtt.Client) {

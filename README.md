@@ -26,7 +26,7 @@ docker compose logs -f ingestion
 
 Grafana: http://localhost:3000 (anonymous access enabled for local dev) — datasource and dashboard ("Valve Stiction Detection": PV/OP signal, stiction label timeline, ellipse-index/kano-verdict trend) are auto-provisioned on startup, no manual setup needed.
 
-Toggle stiction injection via the simulator's `STICTION_ENABLED` env var in `docker-compose.yml` (default: `true`).
+Toggle stiction injection via the simulator's `STICTION_ENABLED` env var in `docker-compose.yml` (default: `true`). Three simulator instances run concurrently by default (`simulator`/`simulator-2`/`simulator-3`, different `sensor_id`s, mixed stiction settings) to demonstrate per-sensor isolation — see `docs/V1_PLAN.md` for the load-test results.
 
 ## Why Go, not Rust
 

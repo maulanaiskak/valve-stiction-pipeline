@@ -74,5 +74,38 @@ services:
     depends_on:
       - mosquitto
 
+  # Multi-sensor load test (V1_PLAN.md deferred item): same shared topic,
+  # sensor_id in the payload distinguishes them -- this is V1's existing
+  # architecture doing double duty as a concurrency test, not V2's FR-7/
+  # FR-8 (per-sensor MQTT topics bridged into Kafka/Redpanda, a separate,
+  # larger piece of scope). One sensor healthy, one stuck -- if ingestion's
+  # per-sensor buffering or detection's per-sensor activity reference ever
+  # leaked state across sensors, this is what would catch it.
+  simulator-2:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      MQTT_TOPIC: valve/data
+      SENSOR_ID: valve-2
+      STICTION_ENABLED: "false"
+    depends_on:
+      - mosquitto
+
+  simulator-3:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      MQTT_TOPIC: valve/data
+      SENSOR_ID: valve-3
+      STICTION_ENABLED: "true"
+    depends_on:
+      - mosquitto
+
 volumes:
   timescaledb-data:

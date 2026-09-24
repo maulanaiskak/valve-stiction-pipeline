@@ -1,0 +1,75 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: valve_stiction
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - timescaledb-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    depends_on:
+      - timescaledb
+
+  detection:
+    build:
+      context: .
+      dockerfile: detection/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@timescaledb:5432/valve_stiction
+      DETECTION_SERVICE_PORT: "50051"
+    ports:
+      - "50051:50051"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    environment:
+      MQTT_BROKER_URL: tcp://mosquitto:1883
+      MQTT_TOPIC: valve/data
+      DETECTION_SERVICE_ADDR: detection:50051
+    depends_on:
+      - mosquitto
+      - detection
+
+  simulator:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      MQTT_TOPIC: valve/data
+      SENSOR_ID: valve-1
+      STICTION_ENABLED: "true"
+    depends_on:
+      - mosquitto
+
+volumes:
+  timescaledb-data:

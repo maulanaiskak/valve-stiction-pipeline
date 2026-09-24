@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS window_results (
     label          TEXT NOT NULL,
     ellipse_index  DOUBLE PRECISION NOT NULL,
     kano_verdict   BOOLEAN NOT NULL,
+    rf_label       TEXT,                    -- nullable: RF model added in V3, older rows predate it
+    rf_probability DOUBLE PRECISION,
     pv             DOUBLE PRECISION[] NOT NULL,
     op             DOUBLE PRECISION[] NOT NULL,
     PRIMARY KEY (id, window_start)

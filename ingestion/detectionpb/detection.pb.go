@@ -91,10 +91,12 @@ func (x *WindowRequest) GetWindowStartUnixMs() int64 {
 
 type WindowResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Label         string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"` // "yes" | "no" | "uncertain"
+	Label         string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"` // "yes" | "no" | "uncertain" -- classic detector
 	EllipseIndex  float64                `protobuf:"fixed64,2,opt,name=ellipse_index,json=ellipseIndex,proto3" json:"ellipse_index,omitempty"`
 	KanoVerdict   bool                   `protobuf:"varint,3,opt,name=kano_verdict,json=kanoVerdict,proto3" json:"kano_verdict,omitempty"`
 	HasActivity   bool                   `protobuf:"varint,4,opt,name=has_activity,json=hasActivity,proto3" json:"has_activity,omitempty"`
+	RfLabel       string                 `protobuf:"bytes,5,opt,name=rf_label,json=rfLabel,proto3" json:"rf_label,omitempty"` // "yes" | "no" -- RF model (valve-stiction-ml)
+	RfProbability float64                `protobuf:"fixed64,6,opt,name=rf_probability,json=rfProbability,proto3" json:"rf_probability,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -157,6 +159,20 @@ func (x *WindowResponse) GetHasActivity() bool {
 	return false
 }
 
+func (x *WindowResponse) GetRfLabel() string {
+	if x != nil {
+		return x.RfLabel
+	}
+	return ""
+}
+
+func (x *WindowResponse) GetRfProbability() float64 {
+	if x != nil {
+		return x.RfProbability
+	}
+	return 0
+}
+
 var File_detection_proto protoreflect.FileDescriptor
 
 const file_detection_proto_rawDesc = "" +
@@ -166,12 +182,14 @@ const file_detection_proto_rawDesc = "" +
 	"\tsensor_id\x18\x01 \x01(\tR\bsensorId\x12\x0e\n" +
 	"\x02pv\x18\x02 \x03(\x01R\x02pv\x12\x0e\n" +
 	"\x02op\x18\x03 \x03(\x01R\x02op\x12/\n" +
-	"\x14window_start_unix_ms\x18\x04 \x01(\x03R\x11windowStartUnixMs\"\x91\x01\n" +
+	"\x14window_start_unix_ms\x18\x04 \x01(\x03R\x11windowStartUnixMs\"\xd3\x01\n" +
 	"\x0eWindowResponse\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12#\n" +
 	"\rellipse_index\x18\x02 \x01(\x01R\fellipseIndex\x12!\n" +
 	"\fkano_verdict\x18\x03 \x01(\bR\vkanoVerdict\x12!\n" +
-	"\fhas_activity\x18\x04 \x01(\bR\vhasActivity2P\n" +
+	"\fhas_activity\x18\x04 \x01(\bR\vhasActivity\x12\x19\n" +
+	"\brf_label\x18\x05 \x01(\tR\arfLabel\x12%\n" +
+	"\x0erf_probability\x18\x06 \x01(\x01R\rrfProbability2P\n" +
 	"\tDetection\x12C\n" +
 	"\fDetectWindow\x12\x18.detection.WindowRequest\x1a\x19.detection.WindowResponseB/Z-valve-stiction-pipeline/ingestion/detectionpbb\x06proto3"
 

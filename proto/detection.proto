@@ -18,8 +18,10 @@ message WindowRequest {
 }
 
 message WindowResponse {
-  string label = 1;         // "yes" | "no" | "uncertain"
+  string label = 1;         // "yes" | "no" | "uncertain" -- classic detector
   double ellipse_index = 2;
   bool kano_verdict = 3;
   bool has_activity = 4;
+  string rf_label = 5;      // "yes" | "no" -- RF model (valve-stiction-ml)
+  double rf_probability = 6;
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/jackc/pgx/v5/pgxpool"
 	kafka "github.com/segmentio/kafka-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -66,8 +67,15 @@ type windowPublisher interface {
 	Publish(sensorID string, pv, op []float64, windowStart int64)
 }
 
+// grpcPublisher calls the detection/ML service (Python, gRPC) and persists
+// the result to TimescaleDB itself -- V3_PLAN.md: the detection service is
+// now a stateless predictor, and this is the only side of the gRPC call
+// with a synchronous round-trip, so it owns persistence. kafkaPublisher
+// (V2) doesn't get a response back, so it has no result to persist here --
+// kafka_worker.py persists on the Python side instead.
 type grpcPublisher struct {
 	client pb.DetectionClient
+	db     *pgxpool.Pool
 }
 
 func (p *grpcPublisher) Publish(sensorID string, pv, op []float64, windowStart int64) {
@@ -85,9 +93,28 @@ func (p *grpcPublisher) Publish(sensorID string, pv, op []float64, windowStart i
 		return
 	}
 	log.Printf(
-		"[%s] label=%s ellipse_index=%.3f kano=%v has_activity=%v",
+		"[%s] label=%s ellipse_index=%.3f kano=%v has_activity=%v rf_label=%s rf_probability=%.3f",
 		sensorID, resp.Label, resp.EllipseIndex, resp.KanoVerdict, resp.HasActivity,
+		resp.RfLabel, resp.RfProbability,
 	)
+
+	if p.db == nil {
+		return
+	}
+	insertCtx, insertCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer insertCancel()
+	_, err = p.db.Exec(insertCtx, `
+		INSERT INTO window_results
+			(sensor_id, window_start, label, ellipse_index, kano_verdict, rf_label, rf_probability, pv, op)
+		VALUES (
+			$1, to_timestamp($2 / 1000.0), $3, $4, $5, $6, $7, $8, $9
+		)`,
+		sensorID, windowStart, resp.Label, resp.EllipseIndex, resp.KanoVerdict,
+		resp.RfLabel, resp.RfProbability, pv, op,
+	)
+	if err != nil {
+		log.Printf("[%s] failed to persist detection result: %v", sensorID, err)
+	}
 }
 
 type kafkaPublisher struct {
@@ -187,7 +214,13 @@ func buildPublisher() windowPublisher {
 		if err != nil {
 			log.Fatalf("failed to connect to detection service at %s: %v", detectionAddr, err)
 		}
-		return &grpcPublisher{client: pb.NewDetectionClient(conn)}
+
+		dbURL := getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/valve_stiction")
+		db, err := pgxpool.New(context.Background(), dbURL)
+		if err != nil {
+			log.Fatalf("failed to create db pool for %s: %v", dbURL, err)
+		}
+		return &grpcPublisher{client: pb.NewDetectionClient(conn), db: db}
 	case "kafka":
 		brokers := getenv("KAFKA_BROKERS", "localhost:9092")
 		topic := getenv("KAFKA_TOPIC", "valve-windows")

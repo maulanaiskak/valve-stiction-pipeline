@@ -1,0 +1,33 @@
+.valve {
+  display: flex;
+  justify-content: center;
+  background: var(--panel-bg);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.stem {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Healthy: smooth continuous travel, ease-in-out -- tracks its setpoint. */
+.stem-healthy {
+  animation: travel 3s ease-in-out infinite alternate;
+}
+
+/* Sticking: steps() timing holds position then jumps -- the flat-then-jump
+   shape stick-slip friction actually produces (see valve-stiction-ml's
+   classic.py docstring on what the Kano-pattern check looks for). */
+.stem-sticking {
+  animation: travel 3s steps(4, jump-end) infinite alternate;
+}
+
+@keyframes travel {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-22px);
+  }
+}

@@ -115,6 +115,19 @@ services:
       redpanda-init:
         condition: service_completed_successfully
 
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@timescaledb:5432/valve_stiction
+      BACKEND_PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
   simulator-1:
     build:
       context: .
